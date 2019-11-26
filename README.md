@@ -37,30 +37,62 @@ Convert 4 DICOM as correct/correct__20000101000000_3000519 (512x512x4x1)
 Conversion required 0.024347 seconds (0.020107 for core code).
 ```
 
-Now, open a notebook or Python script and use this code:
+Now, copy this code in a Python script or a Jupyter notebook and run it:
 
 ```python
 import pydicom
 import os
 from glob import glob
-from pprint import pprint
+import numpy as np
+import nibabel as nib
 
 dir_path = "{your_path}"
-order_slices = list()
+ordered_slices = list()
 for path in glob(dir_path+"*.dcm"):
     dicom_slice = pydicom.dcmread(path)
-    order_slices.append((dicom_slice.ImagePositionPatient[-1], path.split("/")[-1]))
+    ordered_slices.append((dicom_slice, path.split("/")[-1]))
 
-order_slices.sort()
-pprint(order_slices)
+# Sort the slices by ImagePositionPatient
+ordered_slices.sort(key=lambda x: x[0].ImagePositionPatient[-1])
+
+# Load the scan converted by dcm2niix
+dcm2niix_scan = nib.load(dir_path+"correct__20000101000000_3000519.nii")
+
+def get_slice_from_dcm(dcm_slice):
+    """
+    Get a slice of the scan from the dcm (apply rescaling and rotation operations)
+    """
+    # Scale the slice
+    slope = np.float32(dcm_slice.get("RescaleSlope", 1))
+    intercept = np.float32(dcm_slice.get("RescaleIntercept", 0))
+    scaled_slice = dcm_slice.pixel_array.astype(np.float32) * slope + intercept
+    
+    # Rotate the slice 90°
+    rotated = np.rot90(scaled_slice, k=1, axes=[1, 0])
+    return rotated
+
+def compare_slices():
+    """
+    Check that the order of the slices in the converted scan and ordered_slices is the same.
+    Raises an exception if this is not True.
+    """
+    for i in range(len(ordered_slices)):
+        dcm_slice = get_slice_from_dcm(ordered_slices[i][0])
+        dcm2niix_slice = dcm2niix_scan.get_data()[:,:,i]
+
+        assert np.allclose(dcm_slice, dcm2niix_slice)
+        
+    print(f"The order of the slices in the converted scan is: {[x[1] for x in ordered_slices]}")
+
+compare_slices()
 ```
+
 The output is:
 ```
-[("-345.000000", '000173.dcm'),
- ("-343.750000", '000241.dcm'),
- ("-342.500000", '000218.dcm'),
- ("-341.250000", '000001.dcm')]
+The order of the slices in the converted scan is: ['000173.dcm', '000241.dcm', '000218.dcm', '000001.dcm']
 ```
 
-And if you compare each slice to its corresponding position in the matrix: 
-TODO
+## Conclusion
+
+From my tests on the whole scan (257 slices), it seems that the problem is with the first and last slice, the others are OK.
+It adds a slice that is already in the scan in first position (`000241.dcm`) and does not print the last slice (`000001.dcm`).
